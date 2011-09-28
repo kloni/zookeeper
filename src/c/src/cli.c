@@ -537,6 +537,8 @@ int main(int argc, char **argv) {
         return errno;
     }
 
+	zoo_sasl_init(zh, "zookeeper");
+
 #ifdef YCA
     if(zoo_add_auth(zh,"yca",p,strlen(p),0,0)!=ZOK)
     return 2;

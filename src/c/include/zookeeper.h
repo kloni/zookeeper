@@ -34,6 +34,8 @@
 #include "recordio.h"
 #include "zookeeper.jute.h"
 
+#include <gssapi/gssapi_generic.h>
+
 /**
  * \file zookeeper.h 
  * \brief ZooKeeper functions and definitions.
@@ -1575,6 +1577,39 @@ ZOOAPI int zoo_set_acl(zhandle_t *zh, const char *path, int version,
  * \ref zoo_acreate, \ref zoo_adelete, \ref zoo_aset).
  */ 
 ZOOAPI int zoo_multi(zhandle_t *zh, int count, const zoo_op_t *ops, zoo_op_result_t *results);
+
+/*
+ * \brief establishes a GSS-API context with a specified service
+ *
+ * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
+ * \param service_name the ASCII service name of the service
+ *
+ * \return 0 on success, -1 on failure
+ *
+ * Effects:
+ *
+ * service_name is imported as a GSS-API name and a GSS-API context is
+ * established with the corresponding service; the service should be
+ * listening on the TCP connection of zh.  The default GSS-API mechanism
+ * is used, and mutual authentication and replay detection are
+ * requested.
+ *
+ * If successful, 0 is returned.  If
+ * unsuccessful, the GSS-API error messages are displayed on stderr
+ * and -1 is returned.
+ */
+ZOOAPI int
+zoo_sasl_init(zhandle_t *zh, char *service_name);
+
+typedef void (*sasl_completion_t)(int rc, zhandle_t *zh,
+        gss_ctx_id_t gss_context, gss_name_t gss_service_name,
+        const char *value, int value_len);
+
+struct sasl_completion_context {
+	zhandle_t *zh;
+	gss_ctx_id_t gss_context;
+	gss_name_t gss_service_name;
+};
 
 #ifdef __cplusplus
 }
