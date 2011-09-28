@@ -281,7 +281,7 @@ int startsWith(const char *line, const char *prefix) {
 }
 
 static const char *hostPort;
-static int verbose = 0;
+static int verbose = 1;
 
 void processline(char *line) {
     int rc;
@@ -486,6 +486,7 @@ int main(int argc, char **argv) {
 #endif
     int bufoff = 0;
     FILE *fh;
+    int sasl_state = SASL_INITIALIZE + 1;
 
     if (argc < 2) {
         fprintf(stderr,
@@ -528,16 +529,15 @@ int main(int argc, char **argv) {
 #else
     strcpy(p, "dummy");
 #endif
-    verbose = 0;
-    zoo_set_debug_level(ZOO_LOG_LEVEL_WARN);
+    verbose = 1;
+    zoo_set_debug_level(ZOO_LOG_LEVEL_DEBUG);
     zoo_deterministic_conn_order(1); // enable deterministic order
     hostPort = argv[1];
     zh = zookeeper_init(hostPort, watcher, 30000, &myid, 0, 0);
     if (!zh) {
         return errno;
     }
-
-	zoo_sasl_init(zh, "zookeeper");
+    zoo_sasl_init(&sasl_state, zh, "zookeeper");
 
 #ifdef YCA
     if(zoo_add_auth(zh,"yca",p,strlen(p),0,0)!=ZOK)
@@ -545,30 +545,38 @@ int main(int argc, char **argv) {
 #endif
 
 #ifdef THREADED
-    while(!shutdownThisThing) {
-        int rc;
-        int len = sizeof(buffer) - bufoff -1;
-        if (len <= 0) {
-            fprintf(stderr, "Can't handle lines that long!\n");
-            exit(2);
+    if(batchMode){
+	  processline(cmd);
+	  // ugly active wait
+	  while(!shutdownThisThing) {
+	      sleep(1);
+	  }
+	} else {
+        while(!shutdownThisThing) {
+            int rc;
+            int len = sizeof(buffer) - bufoff -1;
+            if (len <= 0) {
+                fprintf(stderr, "Can't handle lines that long!\n");
+                exit(2);
+            }
+            rc = read(0, buffer+bufoff, len);
+            if (rc <= 0) {
+                fprintf(stderr, "bye\n");
+                shutdownThisThing=1;
+                break;
+            }
+            bufoff += rc;
+            buffer[bufoff] = '\0';
+            while (strchr(buffer, '\n')) {
+                char *ptr = strchr(buffer, '\n');
+                *ptr = '\0';
+                processline(buffer);
+                ptr++;
+                memmove(buffer, ptr, strlen(ptr)+1);
+                bufoff = 0;
+            }
         }
-        rc = read(0, buffer+bufoff, len);
-        if (rc <= 0) {
-            fprintf(stderr, "bye\n");
-            shutdownThisThing=1;
-            break;
-        }
-        bufoff += rc;
-        buffer[bufoff] = '\0';
-        while (strchr(buffer, '\n')) {
-            char *ptr = strchr(buffer, '\n');
-            *ptr = '\0';
-            processline(buffer);
-            ptr++;
-            memmove(buffer, ptr, strlen(ptr)+1);
-            bufoff = 0;
-        }
-    }
+	}
 #else
     FD_ZERO(&rfds);
     FD_ZERO(&wfds);
@@ -594,8 +602,13 @@ int main(int argc, char **argv) {
         } else {
             fd = 0;
         }
-        FD_SET(0, &rfds);
-        rc = select(fd+1, &rfds, &wfds, &efds, &tv);
+        if(!batchMode) {
+            FD_SET(0, &rfds);
+        }
+
+        rc = (sasl_state==0 && batchMode && processed==0)
+                ? 0 : select(fd+1, &rfds, &wfds, &efds, &tv);
+
         events = 0;
         if (rc > 0) {
             if (FD_ISSET(fd, &rfds)) {
@@ -605,32 +618,34 @@ int main(int argc, char **argv) {
                 events |= ZOOKEEPER_WRITE;
             }
         }
-        if(batchMode && processed==0){
-          //batch mode
-          processline(cmd);
-          processed=1;
-        }
-        if (FD_ISSET(0, &rfds)) {
-            int rc;
-            int len = sizeof(buffer) - bufoff -1;
-            if (len <= 0) {
-                fprintf(stderr, "Can't handle lines that long!\n");
-                exit(2);
+        if(sasl_state <= SASL_COMPLETE) {
+            if(batchMode && processed==0){
+                //batch mode
+                processline(cmd);
+                processed=1;
             }
-            rc = read(0, buffer+bufoff, len);
-            if (rc <= 0) {
-                fprintf(stderr, "bye\n");
-                break;
-            }
-            bufoff += rc;
-            buffer[bufoff] = '\0';
-            while (strchr(buffer, '\n')) {
-                char *ptr = strchr(buffer, '\n');
-                *ptr = '\0';
-                processline(buffer);
-                ptr++;
-                memmove(buffer, ptr, strlen(ptr)+1);
-                bufoff = 0;
+            if (FD_ISSET(0, &rfds)) {
+                int rc;
+                int len = sizeof(buffer) - bufoff -1;
+                if (len <= 0) {
+                    fprintf(stderr, "Can't handle lines that long!\n");
+                    exit(2);
+                }
+                rc = read(0, buffer+bufoff, len);
+                if (rc <= 0) {
+                    fprintf(stderr, "bye\n");
+                    break;
+                }
+                bufoff += rc;
+                buffer[bufoff] = '\0';
+                while (!batchMode && strchr(buffer, '\n')) {
+                    char *ptr = strchr(buffer, '\n');
+                    *ptr = '\0';
+                    processline(buffer);
+                    ptr++;
+                    memmove(buffer, ptr, strlen(ptr)+1);
+                    bufoff = 0;
+                }
             }
         }
         zookeeper_process(zh, events);

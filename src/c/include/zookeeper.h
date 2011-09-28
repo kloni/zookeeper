@@ -1599,16 +1599,23 @@ ZOOAPI int zoo_multi(zhandle_t *zh, int count, const zoo_op_t *ops, zoo_op_resul
  * and -1 is returned.
  */
 ZOOAPI int
-zoo_sasl_init(zhandle_t *zh, char *service_name);
+zoo_sasl_init(int *state, zhandle_t *zh, char *service_name);
 
-typedef void (*sasl_completion_t)(int rc, zhandle_t *zh,
+typedef void (*sasl_completion_t)(int *state, zhandle_t *zh,
         gss_ctx_id_t gss_context, gss_name_t gss_service_name,
         const char *value, int value_len);
 
 struct sasl_completion_context {
+	int *state;
 	zhandle_t *zh;
 	gss_ctx_id_t gss_context;
 	gss_name_t gss_service_name;
+};
+
+enum ZOO_SASL_STATE {
+  SASL_INITIALIZE = 2,
+  SASL_INTERMEDIATE = 1,
+  SASL_COMPLETE = 0
 };
 
 #ifdef __cplusplus

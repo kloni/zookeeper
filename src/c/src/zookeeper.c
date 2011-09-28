@@ -1160,6 +1160,13 @@ void free_completions(zhandle_t *zh,int callCompletion,int reason)
             notify_sync_completion(sc);
             zh->outstanding_sync--;
             destroy_completion_entry(cptr);
+        } else if (cptr->c.sasl_result == SYNCHRONOUS_MARKER) {
+            struct sync_completion
+                        *sc = (struct sync_completion*)cptr->data;
+            sc->rc = reason;
+            notify_sync_completion(sc);
+            zh->outstanding_sync--;
+            destroy_completion_entry(cptr);
         } else if (callCompletion) {
             if(cptr->xid == PING_XID){
                 // Nothing to do with a ping response
@@ -1943,6 +1950,20 @@ static void process_sync_completion(
     case COMPLETION_MULTI:
         sc->rc = deserialize_multi(cptr->xid, cptr, ia);
         break;
+    case COMPLETION_SASL:
+		if (sc->rc==0) {
+			struct SetSASLResponse res;
+			char *token;
+			deserialize_SetSASLResponse(ia, "reply", &res);
+			sc->u.sasl.token_len = res.token.len;
+			if(res.token.len>0) {
+				token = (char *)malloc(res.token.len);
+				memcpy(token, res.token.buff, res.token.len);
+				sc->u.sasl.token = token;
+			}
+			deallocate_SetSASLResponse(&res);
+		}
+		break;
     default:
         LOG_DEBUG(("Unsupported completion type=%d", cptr->c.type));
         break;
@@ -2075,16 +2096,16 @@ static void deserialize_response(int type, int xid, int failed, int rc, completi
         if (failed) {
             struct sasl_completion_context *sctx =
                     (struct sasl_completion_context *) cptr->data;
-            cptr->c.sasl_result(rc, sctx->zh, sctx->gss_context,
+            cptr->c.sasl_result(sctx->state, sctx->zh, sctx->gss_context,
                     sctx->gss_service_name, 0, 0);
         } else {
             struct sasl_completion_context *sctx =
                     (struct sasl_completion_context *) cptr->data;
-            struct GetSASLRequest res;
-            deserialize_GetSASLRequest(ia, "reply", &res);
-            cptr->c.sasl_result(rc, sctx->zh, sctx->gss_context,
+            struct SetSASLResponse res;
+            deserialize_SetSASLResponse(ia, "reply", &res);
+            cptr->c.sasl_result(sctx->state, sctx->zh, sctx->gss_context,
                     sctx->gss_service_name, res.token.buff, res.token.len);
-            deallocate_GetSASLRequest(&res);
+            deallocate_SetSASLResponse(&res);
         }
         break;
     default:
@@ -3729,16 +3750,16 @@ static void display_status(char *msg, OM_uint32 maj_stat, OM_uint32 min_stat);
 
 static void display_status_1(char *m, OM_uint32 code, int type);
 
-static void sasl_completion_1(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
+static void sasl_completion_1(int *state, zhandle_t *zh, gss_ctx_id_t gss_context,
         gss_name_t service_name, const char *value, int value_len);
 
-static void sasl_completion_2(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
+static void sasl_completion_2(int *state, zhandle_t *zh, gss_ctx_id_t gss_context,
         gss_name_t service_name, const char *value, int value_len);
 
-static void sasl_completion_3(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
+static void sasl_completion_3(int *state, zhandle_t *zh, gss_ctx_id_t gss_context,
         gss_name_t service_name, const char *value, int value_len);
 
-static int queue_sasl_request(zhandle_t *zh, gss_ctx_id_t gss_context,
+static int queue_sasl_request(int *state, zhandle_t *zh, gss_ctx_id_t gss_context,
         gss_name_t service_name, gss_buffer_t tok, sasl_completion_t cptr) {
     struct oarchive *oa;
     int rc;
@@ -3758,19 +3779,27 @@ static int queue_sasl_request(zhandle_t *zh, gss_ctx_id_t gss_context,
     rc = serialize_RequestHeader(oa, "header", &h);
     rc = rc < 0 ? rc : serialize_GetSASLRequest(oa, "req", &req);
 
+#ifdef THREADED
+    struct sync_completion *sc = alloc_sync_completion();
+#else
     struct sasl_completion_context *sctx =
             (struct sasl_completion_context *) malloc(
                     sizeof(struct sasl_completion_context));
+    sctx->state = state;
     sctx->zh = zh;
     sctx->gss_context = gss_context;
     sctx->gss_service_name = service_name;
+#endif
 
     enter_critical(zh);
 
     rc = rc < 0 ?
             rc :
+#ifdef THREADED
+            add_completion(zh, h.xid, COMPLETION_SASL, SYNCHRONOUS_MARKER, sc, 1, NULL, NULL);
+#else
             add_completion(zh, h.xid, COMPLETION_SASL, cptr, sctx, 0, NULL, 0);
-
+#endif
     /* add this buffer to the head of the send queue */
     rc = rc < 0 ?
             rc :
@@ -3786,15 +3815,30 @@ static int queue_sasl_request(zhandle_t *zh, gss_ctx_id_t gss_context,
             ("Sending sasl token request xid=%#x to %s", h.xid, format_current_endpoint_info(zh)));
     /* make a best (non-blocking) effort to send the requests asap */
     adaptor_send_queue(zh, 0);
+
+#ifdef THREADED
+    if(rc==ZOK){
+		wait_sync_completion(sc);
+		rc = sc->rc;
+		if (rc == 0) {
+			cptr(state, zh, gss_context, service_name, sc->u.sasl.token, sc->u.sasl.token_len);
+		}
+	}
+	free_sync_completion(sc);
+#endif
+
     return (rc < 0) ? ZMARSHALLINGERROR : ZOK;
 }
 
-int zoo_sasl_init(zhandle_t *zh, char *service_name) {
+int zoo_sasl_init(int *state, zhandle_t *zh, char *service_name) {
     gss_ctx_id_t gss_context;
-    OM_uint32 ret_flags,  maj_stat, min_stat, init_sec_min_stat;
+    OM_uint32 ret_flags, maj_stat, min_stat;
     gss_buffer_desc send_tok;
     gss_name_t target_name;
     gss_cred_id_t creds = GSS_C_NO_CREDENTIAL;
+    int rc;
+
+    *state = SASL_INITIALIZE;
 
     /*
     // acquiring default credentials doesnt have any effect - probably done by default
@@ -3812,16 +3856,27 @@ int zoo_sasl_init(zhandle_t *zh, char *service_name) {
             (gss_OID) GSS_C_NT_HOSTBASED_SERVICE, &target_name);
     if (maj_stat != GSS_S_COMPLETE) {
         display_status("error parsing name", maj_stat, min_stat);
-        return -1;
+        *state = ZAUTHFAILED;
+        return ZAUTHFAILED;
     }
 
     gss_context = GSS_C_NO_CONTEXT;
 
-    maj_stat = gss_init_sec_context(&init_sec_min_stat, creds, &gss_context,
+    maj_stat = gss_init_sec_context(&min_stat, creds, &gss_context,
             target_name, GSS_C_NULL_OID, GSS_C_MUTUAL_FLAG | GSS_C_REPLAY_FLAG
             , 0, NULL,
             GSS_C_NO_BUFFER, NULL,
             &send_tok, &ret_flags, NULL);
+
+    if (maj_stat != GSS_S_COMPLETE && maj_stat != GSS_S_CONTINUE_NEEDED) {
+		display_status("error initializing context", maj_stat, min_stat);
+		(void) gss_release_name(&min_stat, &target_name);
+		if (gss_context != GSS_C_NO_CONTEXT) {
+			gss_delete_sec_context(&min_stat, &gss_context, GSS_C_NO_BUFFER);
+		}
+		*state = ZAUTHFAILED;
+		return ZAUTHFAILED;
+	}
 
     /*
     gss_release_cred(&min_stat, &creds);
@@ -3830,36 +3885,22 @@ int zoo_sasl_init(zhandle_t *zh, char *service_name) {
     /*
      * Send the initial token
      */
-    if (send_tok.length != 0) {
-        LOG_DEBUG(
-                ("Sending init_sec_context token (size=%d)...", (int) send_tok.length));
-        if (queue_sasl_request(zh, gss_context, target_name, &send_tok,
-                sasl_completion_1) < 0) {
-            (void) gss_release_buffer(&min_stat, &send_tok);
-            (void) gss_release_name(&min_stat, &target_name);
-            return -1;
-        }
-    }
+    LOG_DEBUG(
+			("Sending init_sec_context token (size=%d)...", (int) send_tok.length));
+	rc = queue_sasl_request(state, zh, gss_context, target_name, &send_tok,
+			send_tok.length==0 ? sasl_completion_2 : sasl_completion_1);
+
     (void) gss_release_buffer(&min_stat, &send_tok);
 
-    if (maj_stat != GSS_S_COMPLETE && maj_stat != GSS_S_CONTINUE_NEEDED) {
-        display_status("error initializing context", maj_stat,
-                init_sec_min_stat);
-        (void) gss_release_name(&min_stat, &target_name);
-        if (gss_context != GSS_C_NO_CONTEXT
-        )
-            gss_delete_sec_context(&min_stat, &gss_context, GSS_C_NO_BUFFER);
-        return -1;
-    }
-
-    return 0;
+    return rc;
 }
 
-void sasl_completion_1(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
+void sasl_completion_1(int *state, zhandle_t *zh, gss_ctx_id_t gss_context,
         gss_name_t service_name, const char *value, int value_len) {
     OM_uint32 ret_flags, maj_stat, min_stat;
     gss_buffer_desc send_tok, recv_tok;
     gss_cred_id_t creds = GSS_C_NO_CREDENTIAL;
+    int rc;
 
     /*
      * Read server token
@@ -3892,27 +3933,35 @@ void sasl_completion_1(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
         if (gss_context != GSS_C_NO_CONTEXT) {
             gss_delete_sec_context(&min_stat, &gss_context, GSS_C_NO_BUFFER);
         }
+        *state = ZAUTHFAILED;
         return;
     }
 
     //(void) gss_release_cred(&min_stat, &creds);
 
-    LOG_DEBUG(
-            ("Sending init_sec_context token (size=%d)...", (int) send_tok.length));
     /*
      * If context negotiation complete (expected) move on to step 2 (send empty
      * token) else repeat step 1
      */
-    queue_sasl_request(zh, gss_context, service_name, &send_tok,
-            maj_stat == GSS_S_COMPLETE ? sasl_completion_2 : sasl_completion_1);
+    if(maj_stat == GSS_S_COMPLETE) {
+    	*state = SASL_INTERMEDIATE;
+    	rc = queue_sasl_request(state, zh, gss_context, service_name, &send_tok,
+    	            sasl_completion_2);
+    } else {
+    	LOG_DEBUG(
+            ("Sending another init_sec_context token (size=%d)...", (int) send_tok.length));
+    	rc = queue_sasl_request(state, zh, gss_context, service_name, &send_tok,
+    	            sasl_completion_1);
+    }
 
     (void) gss_release_buffer(&min_stat, &send_tok);
 }
 
-void sasl_completion_2(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
+void sasl_completion_2(int *state, zhandle_t *zh, gss_ctx_id_t gss_context,
         gss_name_t service_name, const char *value, int value_len) {
     OM_uint32 maj_stat, min_stat;
     gss_buffer_desc send_tok, recv_tok;
+    int rc;
 
     recv_tok.length = value_len;
     recv_tok.value = (void *) value;
@@ -3933,21 +3982,23 @@ void sasl_completion_2(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
         if (gss_context != GSS_C_NO_CONTEXT) {
             gss_delete_sec_context(&min_stat, &gss_context, GSS_C_NO_BUFFER);
         }
+        *state = ZAUTHFAILED;
         return;
     }
 
     LOG_DEBUG( ("Sending wrapped token (size=%d)...", (int) send_tok.length));
-    queue_sasl_request(zh, gss_context, service_name, &send_tok,
+    rc = queue_sasl_request(state, zh, gss_context, service_name, &send_tok,
             sasl_completion_3);
 
     (void) gss_release_buffer(&min_stat, &send_tok);
 
 }
 
-void sasl_completion_3(int rc, zhandle_t *zh, gss_ctx_id_t gss_context,
+void sasl_completion_3(int *state, zhandle_t *zh, gss_ctx_id_t gss_context,
         gss_name_t service_name, const char *value, int value_len) {
     OM_uint32 maj_stat, min_stat;
 
+    *state = SASL_COMPLETE;
     LOG_INFO(("SASL Authentication success"));
     display_gss_status(gss_context);
     maj_stat = gss_release_name(&min_stat, &service_name);
