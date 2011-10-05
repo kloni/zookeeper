@@ -21,13 +21,16 @@ package org.apache.zookeeper.server;
 import java.security.Principal;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.util.HashMap;
+
 import javax.security.auth.Subject;
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
+
 import org.apache.zookeeper.Login;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ZooKeeperSaslServer {
     Logger LOG = LoggerFactory.getLogger(ZooKeeperSaslServer.class);
@@ -99,7 +102,17 @@ public class ZooKeeperSaslServer {
                     // JAAS non-GSSAPI authentication: assuming and supporting only DIGEST-MD5 mechanism for now.
                     // TODO: use 'authMech=' value in zoo.cfg.
                     try {
-                        SaslServer saslServer = Sasl.createSaslServer("DIGEST-MD5","zookeeper","zk-sasl-md5",null, login.callbackHandler);
+                        // required by c client api - Sasl.QOP="auth" is not set
+                        // by default although stated in javadoc (Sun JRE 1.6.0_26-b03)
+                        HashMap<String, Object> props = new HashMap<String, Object>();
+                        props.put(Sasl.QOP, "auth-conf,auth-int,auth");
+                        
+                        SaslServer saslServer = Sasl.createSaslServer(
+                                "DIGEST-MD5",
+                                "zookeeper",
+                                "zk-sasl-md5",
+                                props, 
+                                login.callbackHandler);
                         return saslServer;
                     }
                     catch (SaslException e) {
@@ -125,6 +138,7 @@ public class ZooKeeperSaslServer {
     }
 
 }
+
 
 
 
