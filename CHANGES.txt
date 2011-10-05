@@ -15,6 +15,14 @@ BUGFIXES:
 
   ZOOKEEPER-1192. Leader.waitForEpochAck() checks waitingForNewEpoch instead of checking electionFinished (Alex Shraer via breed)
 
+  ZOOKEEPER-1203. Zookeeper systest is missing Junit Classes
+  (Prashant Gokhale via phunt)
+  
+  ZOOKEEPER-1174. FD leak when network unreachable (Ted Dunning via camille)
+
+  ZOOKEEPER-1206. Sequential node creation does not use always use
+  digits in node name given certain Locales. (Mark Miller via phunt)
+
 IMPROVEMENTS:
 
   ZOOKEEPER-1170. Fix compiler (eclipse) warnings: unused imports,
@@ -480,7 +488,9 @@ IMPROVEMENTS:
   code (Thomas Koch via phunt)
 
   ZOOKEEPER-1171. fix build for java 7 (phunt via mahadev)
- 
+
+  ZOOKEEPER-1201. Clean SaslServerCallbackHandler.java. (Thomas Koch
+  via mahadev) 
 
 NEW FEATURES:
   ZOOKEEPER-729. Java client API to recursively delete a subtree.
