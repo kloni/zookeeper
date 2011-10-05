@@ -42,6 +42,8 @@ int write(int _Filehandle, const void * _Buf, unsigned int _MaxCharCount);
 #include <yca/yca.h>
 #endif
 
+#include "zk_sasl.h"
+
 #define _LL_CAST_ (long long)
 
 static zhandle_t *zh;
@@ -56,6 +58,88 @@ static int sent=0;
 static int recvd=0;
 
 static int shutdownThisThing=0;
+
+sasl_conn_t *my_sasl_conn = NULL;
+char *service = "zookeeper";
+char *host;
+char *mech;
+char *user;
+char *realm;
+
+void processline(char *line);
+
+static int getrealm(void *context __attribute__((unused)), int id,
+        const char **availrealms, const char **result) {
+    *result = realm;
+    return SASL_OK;
+}
+
+static int simple(void *context __attribute__((unused)), int id,
+        const char **result, unsigned *len) {
+    /* paranoia check */
+    if (!result)
+        return SASL_BADPARAM;
+
+    switch (id) {
+    case SASL_CB_USER:
+        *result = user;
+        break;
+    case SASL_CB_AUTHNAME:
+        *result = user;
+        break;
+    default:
+        return SASL_BADPARAM;
+    }
+
+    return SASL_OK;
+}
+
+#ifndef HAVE_GETPASSPHRASE
+static char *
+getpassphrase(const char *prompt) {
+    return getpass(prompt);
+}
+#endif /* ! HAVE_GETPASSPHRASE */
+
+static int getsecret(sasl_conn_t *conn, void *context __attribute__((unused)),
+        int id, sasl_secret_t **psecret) {
+    char *password;
+    size_t len;
+    static sasl_secret_t *x;
+
+    /* paranoia check */
+    if (!conn || !psecret || id != SASL_CB_PASS
+    )
+        return SASL_BADPARAM;
+
+    password = getpassphrase("Password: ");
+    if (!password)
+        return SASL_FAIL;
+
+    len = strlen(password);
+
+    x = (sasl_secret_t *) realloc(x, sizeof(sasl_secret_t) + len);
+
+    if (!x) {
+        memset(password, 0, len);
+        return SASL_NOMEM;
+    }
+
+    x->len = len;
+    strcpy((char *) x->data, password);
+    memset(password, 0, len);
+
+    *psecret = x;
+    return SASL_OK;
+}
+
+/* callbacks we support */
+sasl_callback_t callbacks[] = {
+        { SASL_CB_GETREALM, &getrealm, NULL },
+        { SASL_CB_USER, &simple, NULL },
+        { SASL_CB_AUTHNAME, &simple, NULL },
+        { SASL_CB_PASS, &getsecret, NULL },
+        { SASL_CB_LIST_END, NULL, NULL } };
 
 static __attribute__ ((unused)) void 
 printProfileInfo(struct timeval start, struct timeval end, int thres,
@@ -114,6 +198,26 @@ void watcher(zhandle_t *zzh, int type, int state, const char *path,
                         }
                         fclose(fh);
                     }
+                }
+                const char *mechs;
+                int mechlen;
+
+                if(mech) {
+                    if(strcmp("GSSAPI", mech)==0 || (user && host)) {
+                        zoo_sasl_connect(zzh, "zookeeper", host, &my_sasl_conn, &mechs, &mechlen);
+                        fprintf(stderr, "Mechs [%d]: %s\n", mechlen, mechs);
+
+                        if (zoo_sasl_negotiate(zh, my_sasl_conn, mech, mechs)
+                                == SASL_OK) {
+                            fprintf(stderr, "SASL successfully authenticated as %s\n", user);
+                        }
+                    } else {
+                        fprintf(stderr, "Mechanism %s requires username (-u) and host (-h zk-sasl-md5) to be specified\n", mech);
+                    }
+                }
+                if(batchMode) {
+                    processline(cmd);
+                    shutdownThisThing = 1;
                 }
             }
         } else if (state == ZOO_AUTH_FAILED_STATE) {
@@ -281,7 +385,7 @@ int startsWith(const char *line, const char *prefix) {
 }
 
 static const char *hostPort;
-static int verbose = 1;
+static int verbose = 0;
 
 void processline(char *line) {
     int rc;
@@ -473,6 +577,18 @@ void processline(char *line) {
     }
 }
 
+static int usage(char **argv) {
+    fprintf(stderr,
+            "USAGE %s [-u sasluser -m saslmech] [-r saslrealm] [-i clientIdFile] [-c cmd] zookeeper_host_list\n",
+            argv[0]);
+    fprintf(stderr,
+            "Version: ZooKeeper cli (c client) version %d.%d.%d\n",
+            ZOO_MAJOR_VERSION,
+            ZOO_MINOR_VERSION,
+            ZOO_PATCH_VERSION);
+    return 2;
+}
+
 int main(int argc, char **argv) {
 #ifndef THREADED
     fd_set rfds, wfds, efds;
@@ -486,26 +602,16 @@ int main(int argc, char **argv) {
 #endif
     int bufoff = 0;
     FILE *fh;
-    int sasl_state = SASL_INITIALIZE + 1;
+    int c;
 
-    if (argc < 2) {
-        fprintf(stderr,
-                "USAGE %s zookeeper_host_list [clientid_file|cmd:(ls|ls2|create|od|...)]\n", 
-                argv[0]);
-        fprintf(stderr,
-                "Version: ZooKeeper cli (c client) version %d.%d.%d\n", 
-                ZOO_MAJOR_VERSION,
-                ZOO_MINOR_VERSION,
-                ZOO_PATCH_VERSION);
-        return 2;
-    }
-    if (argc > 2) {
-      if(strncmp("cmd:",argv[2],4)==0){
-        strcpy(cmd,argv[2]+4);
-        batchMode=1;
-        fprintf(stderr,"Batch mode: %s\n",cmd);
-      }else{
-        clientIdFile = argv[2];
+    while ((c = getopt(argc, argv, "u:h:i:s:m:c:r:")) != EOF) {
+    switch(c) {
+    case 'u':
+        user = optarg;
+        break;
+
+    case 'i':
+        clientIdFile = optarg;
         fh = fopen(clientIdFile, "r");
         if (fh) {
             if (fread(&myid, sizeof(myid), 1, fh) != sizeof(myid)) {
@@ -513,7 +619,40 @@ int main(int argc, char **argv) {
             }
             fclose(fh);
         }
-      }
+        break;
+
+    case 's':
+        service = optarg;
+        break;
+
+    case 'h':
+        host = optarg;
+        break;
+
+    case 'm':
+        mech = optarg;
+        break;
+
+    case 'c':
+        strcpy(cmd,optarg);
+        batchMode = 1;
+        break;
+
+    case 'r':
+        realm = optarg;
+        break;
+
+    default:
+        return usage(argv);
+        break;
+    }
+    }
+
+    if (optind > argc - 1) {
+    return usage(argv);
+    }
+    if (optind == argc - 1) {
+    hostPort = argv[optind];
     }
 #ifdef YCA
     strcpy(appId,"yahoo.example.yca_test");
@@ -530,14 +669,15 @@ int main(int argc, char **argv) {
     strcpy(p, "dummy");
 #endif
     verbose = 1;
+
+    zoo_sasl_init(callbacks);
+
     zoo_set_debug_level(ZOO_LOG_LEVEL_DEBUG);
     zoo_deterministic_conn_order(1); // enable deterministic order
-    hostPort = argv[1];
     zh = zookeeper_init(hostPort, watcher, 30000, &myid, 0, 0);
     if (!zh) {
         return errno;
     }
-    zoo_sasl_init(&sasl_state, zh, "zookeeper");
 
 #ifdef YCA
     if(zoo_add_auth(zh,"yca",p,strlen(p),0,0)!=ZOK)
@@ -545,36 +685,28 @@ int main(int argc, char **argv) {
 #endif
 
 #ifdef THREADED
-    if(batchMode){
-	  processline(cmd);
-	  // ugly active wait
-	  while(!shutdownThisThing) {
-	      sleep(1);
-	  }
-	} else {
-        while(!shutdownThisThing) {
-            int rc;
-            int len = sizeof(buffer) - bufoff -1;
-            if (len <= 0) {
-                fprintf(stderr, "Can't handle lines that long!\n");
-                exit(2);
-            }
-            rc = read(0, buffer+bufoff, len);
-            if (rc <= 0) {
-                fprintf(stderr, "bye\n");
-                shutdownThisThing=1;
-                break;
-            }
-            bufoff += rc;
-            buffer[bufoff] = '\0';
-            while (strchr(buffer, '\n')) {
-                char *ptr = strchr(buffer, '\n');
-                *ptr = '\0';
-                processline(buffer);
-                ptr++;
-                memmove(buffer, ptr, strlen(ptr)+1);
-                bufoff = 0;
-            }
+    while(!shutdownThisThing) {
+        int rc;
+        int len = sizeof(buffer) - bufoff -1;
+        if (len <= 0) {
+            fprintf(stderr, "Can't handle lines that long!\n");
+            exit(2);
+        }
+        rc = read(0, buffer+bufoff, len);
+        if (rc <= 0) {
+            fprintf(stderr, "bye\n");
+            shutdownThisThing=1;
+            break;
+        }
+        bufoff += rc;
+        buffer[bufoff] = '\0';
+        while (strchr(buffer, '\n')) {
+            char *ptr = strchr(buffer, '\n');
+            *ptr = '\0';
+            processline(buffer);
+            ptr++;
+            memmove(buffer, ptr, strlen(ptr)+1);
+            bufoff = 0;
         }
 	}
 #else
@@ -602,13 +734,8 @@ int main(int argc, char **argv) {
         } else {
             fd = 0;
         }
-        if(!batchMode) {
-            FD_SET(0, &rfds);
-        }
-
-        rc = (sasl_state==0 && batchMode && processed==0)
-                ? 0 : select(fd+1, &rfds, &wfds, &efds, &tv);
-
+        FD_SET(0, &rfds);
+        rc = select(fd+1, &rfds, &wfds, &efds, &tv);
         events = 0;
         if (rc > 0) {
             if (FD_ISSET(fd, &rfds)) {
@@ -618,34 +745,32 @@ int main(int argc, char **argv) {
                 events |= ZOOKEEPER_WRITE;
             }
         }
-        if(sasl_state <= SASL_COMPLETE) {
-            if(batchMode && processed==0){
-                //batch mode
-                processline(cmd);
-                processed=1;
+        if(batchMode && processed==0){
+          //batch mode
+          processline(cmd);
+          processed=1;
+        }
+        if (FD_ISSET(0, &rfds)) {
+            int rc;
+            int len = sizeof(buffer) - bufoff -1;
+            if (len <= 0) {
+                fprintf(stderr, "Can't handle lines that long!\n");
+                exit(2);
             }
-            if (FD_ISSET(0, &rfds)) {
-                int rc;
-                int len = sizeof(buffer) - bufoff -1;
-                if (len <= 0) {
-                    fprintf(stderr, "Can't handle lines that long!\n");
-                    exit(2);
-                }
-                rc = read(0, buffer+bufoff, len);
-                if (rc <= 0) {
-                    fprintf(stderr, "bye\n");
-                    break;
-                }
-                bufoff += rc;
-                buffer[bufoff] = '\0';
-                while (!batchMode && strchr(buffer, '\n')) {
-                    char *ptr = strchr(buffer, '\n');
-                    *ptr = '\0';
-                    processline(buffer);
-                    ptr++;
-                    memmove(buffer, ptr, strlen(ptr)+1);
-                    bufoff = 0;
-                }
+            rc = read(0, buffer+bufoff, len);
+            if (rc <= 0) {
+                fprintf(stderr, "bye\n");
+                break;
+            }
+            bufoff += rc;
+            buffer[bufoff] = '\0';
+            while (strchr(buffer, '\n')) {
+                char *ptr = strchr(buffer, '\n');
+                *ptr = '\0';
+                processline(buffer);
+                ptr++;
+                memmove(buffer, ptr, strlen(ptr)+1);
+                bufoff = 0;
             }
         }
         zookeeper_process(zh, events);

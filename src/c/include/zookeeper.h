@@ -34,7 +34,7 @@
 #include "recordio.h"
 #include "zookeeper.jute.h"
 
-#include <gssapi/gssapi_generic.h>
+#include <sasl/sasl.h>
 
 /**
  * \file zookeeper.h 
@@ -1578,44 +1578,15 @@ ZOOAPI int zoo_set_acl(zhandle_t *zh, const char *path, int version,
  */ 
 ZOOAPI int zoo_multi(zhandle_t *zh, int count, const zoo_op_t *ops, zoo_op_result_t *results);
 
-/*
- * \brief establishes a GSS-API context with a specified service
- *
- * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
- * \param service_name the ASCII service name of the service
- *
- * \return 0 on success, -1 on failure
- *
- * Effects:
- *
- * service_name is imported as a GSS-API name and a GSS-API context is
- * established with the corresponding service; the service should be
- * listening on the TCP connection of zh.  The default GSS-API mechanism
- * is used, and mutual authentication and replay detection are
- * requested.
- *
- * If successful, 0 is returned.  If
- * unsuccessful, the GSS-API error messages are displayed on stderr
- * and -1 is returned.
- */
-ZOOAPI int
-zoo_sasl_init(int *state, zhandle_t *zh, char *service_name);
+typedef int (*sasl_completion_t)(int rc, zhandle_t *zh, sasl_conn_t *conn,
+        const char *serverin, int serverinlen);
 
-typedef void (*sasl_completion_t)(int *state, zhandle_t *zh,
-        gss_ctx_id_t gss_context, gss_name_t gss_service_name,
-        const char *value, int value_len);
+ZOOAPI int queue_sasl_request(zhandle_t *zh, sasl_conn_t *conn, const char *data,
+        unsigned len, sasl_completion_t cptr);
 
-struct sasl_completion_context {
-	int *state;
-	zhandle_t *zh;
-	gss_ctx_id_t gss_context;
-	gss_name_t gss_service_name;
-};
-
-enum ZOO_SASL_STATE {
-  SASL_INITIALIZE = 2,
-  SASL_INTERMEDIATE = 1,
-  SASL_COMPLETE = 0
+struct sasl_completion_ctx {
+    zhandle_t *zh;
+    sasl_conn_t *conn;
 };
 
 #ifdef __cplusplus
