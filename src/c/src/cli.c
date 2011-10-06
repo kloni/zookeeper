@@ -42,7 +42,9 @@ int write(int _Filehandle, const void * _Buf, unsigned int _MaxCharCount);
 #include <yca/yca.h>
 #endif
 
+#ifdef SASL
 #include "zk_sasl.h"
+#endif
 
 #define _LL_CAST_ (long long)
 
@@ -59,15 +61,18 @@ static int recvd=0;
 
 static int shutdownThisThing=0;
 
+#ifdef SASL
 zoo_sasl_conn_t *my_sasl_conn = NULL;
 char *service = "zookeeper";
 char *host;
 char *mech;
 char *user;
 char *realm;
+#endif
 
 void processline(char *line);
 
+#ifdef SASL
 static int getrealm(void *context __attribute__((unused)), int id,
         const char **availrealms, const char **result) {
     *result = realm;
@@ -140,6 +145,7 @@ sasl_callback_t callbacks[] = {
         { SASL_CB_AUTHNAME, &simple, NULL },
         { SASL_CB_PASS, &getsecret, NULL },
         { SASL_CB_LIST_END, NULL, NULL } };
+#endif
 
 static __attribute__ ((unused)) void 
 printProfileInfo(struct timeval start, struct timeval end, int thres,
@@ -199,6 +205,7 @@ void watcher(zhandle_t *zzh, int type, int state, const char *path,
                         fclose(fh);
                     }
                 }
+#ifdef SASL
                 const char *mechs;
                 int mechlen;
 
@@ -215,6 +222,7 @@ void watcher(zhandle_t *zzh, int type, int state, const char *path,
                         fprintf(stderr, "Mechanism %s requires username (-u) and host (-h zk-sasl-md5) to be specified\n", mech);
                     }
                 }
+#endif
                 if(batchMode) {
                     processline(cmd);
                     shutdownThisThing = 1;
@@ -578,14 +586,20 @@ void processline(char *line) {
 }
 
 static int usage(char **argv) {
+#ifdef SASL
+    const char *SASL_FEATURE = " (with sasl support)";
+#else
+    const char *SASL_FEATURE = "";
+#endif
     fprintf(stderr,
             "USAGE %s [-u sasluser -m saslmech] [-r saslrealm] [-i clientIdFile] [-c cmd] zookeeper_host_list\n",
             argv[0]);
     fprintf(stderr,
-            "Version: ZooKeeper cli (c client) version %d.%d.%d\n",
+            "Version: ZooKeeper cli (c client) version %d.%d.%d%s\n",
             ZOO_MAJOR_VERSION,
             ZOO_MINOR_VERSION,
-            ZOO_PATCH_VERSION);
+            ZOO_PATCH_VERSION,
+            SASL_FEATURE);
     return 2;
 }
 
@@ -603,22 +617,11 @@ int main(int argc, char **argv) {
     int bufoff = 0;
     FILE *fh;
     int c;
-
+#ifdef SASL
     while ((c = getopt(argc, argv, "u:h:i:s:m:c:r:")) != EOF) {
     switch(c) {
     case 'u':
         user = optarg;
-        break;
-
-    case 'i':
-        clientIdFile = optarg;
-        fh = fopen(clientIdFile, "r");
-        if (fh) {
-            if (fread(&myid, sizeof(myid), 1, fh) != sizeof(myid)) {
-                memset(&myid, 0, sizeof(myid));
-            }
-            fclose(fh);
-        }
         break;
 
     case 's':
@@ -633,13 +636,27 @@ int main(int argc, char **argv) {
         mech = optarg;
         break;
 
+    case 'r':
+        realm = optarg;
+        break;
+#else
+    while ((c = getopt(argc, argv, "i:c:")) != EOF) {
+    switch(c) {
+#endif
+    case 'i':
+        clientIdFile = optarg;
+        fh = fopen(clientIdFile, "r");
+        if (fh) {
+            if (fread(&myid, sizeof(myid), 1, fh) != sizeof(myid)) {
+                memset(&myid, 0, sizeof(myid));
+            }
+            fclose(fh);
+        }
+        break;
+
     case 'c':
         strcpy(cmd,optarg);
         batchMode = 1;
-        break;
-
-    case 'r':
-        realm = optarg;
         break;
 
     default:
@@ -670,7 +687,9 @@ int main(int argc, char **argv) {
 #endif
     verbose = 1;
 
+#ifdef SASL
     zoo_sasl_init(callbacks);
+#endif
 
     zoo_set_debug_level(ZOO_LOG_LEVEL_DEBUG);
     zoo_deterministic_conn_order(1); // enable deterministic order

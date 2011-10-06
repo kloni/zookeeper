@@ -1,8 +1,19 @@
-/*
- * zookeeper_sasl.c
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *  Created on: 30.09.2011
- *      Author: tom
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include <sys/socket.h>
@@ -11,8 +22,9 @@
 #include <netdb.h>
 #include <string.h>
 
-#include "zk_sasl.h"
+#include "zk_adaptor.h"
 #include "zookeeper_log.h"
+#include <sasl/sasl.h>
 
 #define SAMPLE_SEC_BUF_SIZE (2048)
 
@@ -37,7 +49,7 @@ static int sasl_auth(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *mech,
     if (mech) {
         if (!strstr(supportedmechs, mech)) {
             LOG_DEBUG(("client doesn't support mandatory mech '%s'\n", mech));
-            return -1;
+            return ZSYSTEMERROR;
         }
     }
 
@@ -106,7 +118,7 @@ static int sasl_proceed(int sr, zhandle_t *zh, zoo_sasl_conn_t *conn,
         LOG_ERROR(("starting SASL negotiation: %s %s",
                 sasl_errstring(sr, NULL, NULL),
                 sasl_errdetail((sasl_conn_t *) conn)));
-        return -1;
+        return ZSYSTEMERROR;
     }
 
     if (sr == SASL_CONTINUE || clientoutlen > 0) {

@@ -40,6 +40,10 @@ using namespace std;
 #include <recordio.h>
 #include "Util.h"
 
+#ifdef SASL
+#include <sasl/sasl.h>
+#endif
+
 struct buff_struct_2 {
     int32_t len;
     int32_t off;
@@ -201,6 +205,7 @@ class Zookeeper_simpleSystem : public CPPUNIT_NS::TestFixture
     CPPUNIT_TEST(testWatcherAutoResetWithGlobal);
     CPPUNIT_TEST(testWatcherAutoResetWithLocal);
     CPPUNIT_TEST(testGetChildren2);
+    CPPUNIT_TEST(testSasl);
 #endif
     CPPUNIT_TEST_SUITE_END();
 
@@ -268,6 +273,12 @@ public:
     void startServer() {
         char cmd[1024];
         sprintf(cmd, "%s start %s", ZKSERVER_CMD, getHostPorts());
+        CPPUNIT_ASSERT(system(cmd) == 0);
+    }
+
+    void startServerWithOpts(const char *opts) {
+        char cmd[1024];
+        sprintf(cmd, "%s start %s %s", ZKSERVER_CMD, getHostPorts(), opts);
         CPPUNIT_ASSERT(system(cmd) == 0);
     }
 
@@ -419,6 +430,63 @@ public:
         CPPUNIT_ASSERT_EQUAL(tmp, rc);
         count++;
     }
+
+#ifdef SASL
+    static int saslDigestInitCompletion(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn,
+        const char *serverin, int serverinlen) {
+        CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
+        return rc;
+    }
+
+    static int saslSimpleCallback(void *context __attribute__((unused)), int id,
+            const char **result, unsigned *len) {
+        const char *user = "super";
+
+        /* paranoia check */
+        if (!result) {
+            fprintf(stderr, "SASL CB no result\n");
+            return -1;
+        }
+
+        switch (id) {
+        case SASL_CB_USER:
+            *result = user;
+            break;
+        case SASL_CB_AUTHNAME:
+            *result = user;
+            break;
+        default:
+            fprintf(stderr, "??? SASL CB [%d]\n", id);
+            return -1;
+        }
+        fprintf(stderr, "SASL CB [%d]: %s\n", id, *result);
+        return 0;
+    }
+
+    static int saslPassCallback(sasl_conn_t *conn, void *context __attribute__((unused)),
+            int id, sasl_secret_t **psecret) {
+        const char *pass = "test";
+        unsigned long int len;
+
+        /* paranoia check */
+        if (!psecret) {
+            return -1;
+        }
+
+        switch (id) {
+        case SASL_CB_PASS:
+            len = strlen(pass);
+            *psecret = (sasl_secret_t *) malloc(sizeof(sasl_secret_t) + len);
+            (*psecret)->len = len;
+            strcpy((char *)(*psecret)->data, (char *) pass);
+            break;
+        default:
+            return -1;
+        }
+        fprintf(stderr, "SASL PASS [%d]: %s\n", id, (*psecret)->data);
+        return 0;
+    }
+#endif
 
     static void verifyCreateFails(const char *path, zhandle_t *zk) {
       CPPUNIT_ASSERT_EQUAL((int)ZBADARGUMENTS, zoo_create(zk,
@@ -1111,6 +1179,59 @@ public:
         testWatcherAutoReset(zk, &ctx, &lctx);
       }
     }
+
+#ifdef SASL
+    void testSasl() {
+        int rc;
+        const char *saslopt = "-sasl";
+        count = 0;
+        watchctx_t ctx1, ctx2, ctx3, ctx4, ctx5;
+
+        zhandle_t *zk = createClient(&ctx1);
+        zoo_sasl_conn_t *sasl_conn;
+        const char *supportedmechs;
+        const char *mech = "DIGEST-MD5";
+        const char *service = "zookeeper";
+        const char *host = "zk-sasl-md5";
+        int supportedmechcount;
+
+        stopServer();
+        startServerWithOpts(saslopt);
+
+        //zoo_set_log_stream(stdout);
+        //zoo_set_debug_level(ZOO_LOG_LEVEL_DEBUG);
+
+        rc = zoo_sasl(zk, NULL, (const char *) "", 0, saslDigestInitCompletion);
+        CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
+
+        stopServer();
+        startServerWithOpts(saslopt);
+
+        sasl_callback_t callbacks[] = {
+                { SASL_CB_USER, (int (*)())&saslSimpleCallback, NULL },
+                { SASL_CB_AUTHNAME, (int (*)())&saslSimpleCallback, NULL },
+                { SASL_CB_PASS, (int (*)())&saslPassCallback, NULL },
+                { SASL_CB_LIST_END, NULL, NULL } };
+
+        rc = zoo_sasl_init(callbacks);
+        CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
+
+        zhandle_t *zk2 = createClient(&ctx2);
+
+        rc = zoo_sasl_connect(zk2, (char *) service, (char *) host, &sasl_conn,
+                &supportedmechs, &supportedmechcount);
+        CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
+
+        rc = zoo_sasl_authenticate(zk2, sasl_conn, mech, supportedmechs);
+        CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
+
+        //sleep(2);
+
+        stopServer();
+        startServer();
+
+    }
+#endif
 };
 
 volatile int Zookeeper_simpleSystem::count;

@@ -21,9 +21,26 @@ ZOOPORT=22181
 
 if [ "x$1" == "x" ]
 then
-    echo "USAGE: $0 startClean|start|stop hostPorts"
+    echo "USAGE: $0 startClean|start|stop hostPorts [-sasl]"
     exit 2
 fi
+
+for var in "$@"
+do
+    if [[ "x$var" != "x0" && "x$var" != "x1" && "x$var" != "x2" ]]
+    then
+        if [ "$var" == "-sasl" ]
+        then
+            SASLCONFFILE=tests/jaas.digest.server.conf
+            if [ "x${base_dir}" != "x" ]
+            then
+                SASLCONFFILE=${base_dir}/src/c/$SASLCONFFILE
+            fi
+            JVMARGS=$JVMARGS\ -Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider
+            JVMARGS=$JVMARGS\ -Djava.security.auth.login.config=$SASLCONFFILE
+        fi
+    fi
+done
 
 case "`uname`" in
     CYGWIN*) cygwin=true ;;
@@ -107,12 +124,12 @@ start|startClean)
     if [ "x${base_dir}" == "x" ]
         then
         mkdir -p /tmp/zkdata
-        java -cp "$CLASSPATH" org.apache.zookeeper.server.ZooKeeperServerMain $ZOOPORT /tmp/zkdata 3000 $ZKMAXCNXNS &> /tmp/zk.log &
+        java -cp "$CLASSPATH" $JVMARGS org.apache.zookeeper.server.ZooKeeperServerMain $ZOOPORT /tmp/zkdata 3000 $ZKMAXCNXNS &> /tmp/zk.log &
         pid=$!
         echo -n $! > /tmp/zk.pid
         else
         mkdir -p "${base_dir}/build/tmp/zkdata"
-        java -cp "$CLASSPATH" org.apache.zookeeper.server.ZooKeeperServerMain $ZOOPORT "${base_dir}/build/tmp/zkdata" 3000 $ZKMAXCNXNS &> "${base_dir}/build/tmp/zk.log" &
+        java -cp "$CLASSPATH" $JVMARGS org.apache.zookeeper.server.ZooKeeperServerMain $ZOOPORT "${base_dir}/build/tmp/zkdata" 3000 $ZKMAXCNXNS &> "${base_dir}/build/tmp/zk.log" &
         pid=$!
         echo -n $pid > "${base_dir}/build/tmp/zk.pid"
     fi

@@ -7,6 +7,12 @@ AM_CXXFLAGS = -Wall $(USEIPV6)
 
 LIB_LDFLAGS = -no-undefined -version-info 2
 
+if WANT_SASL
+SASL_CFLAGS = -DSASL
+SASL_LIBS = -lsasl2
+SASL_SRC = src/zk_sasl.c
+endif
+
 pkginclude_HEADERS = include/zookeeper.h include/zookeeper_version.h include/zookeeper_log.h include/proto.h include/recordio.h generated/zookeeper.jute.h
 EXTRA_DIST=LICENSE
 
@@ -19,30 +25,31 @@ libhashtable_la_SOURCES = $(HASHTABLE_SRC)
 COMMON_SRC = src/zookeeper.c include/zookeeper.h include/zookeeper_version.h include/zookeeper_log.h\
     src/recordio.c include/recordio.h include/proto.h \
     src/zk_adaptor.h generated/zookeeper.jute.c \
-    src/zookeeper_log.h src/zk_log.c src/zk_hashtable.h src/zk_hashtable.c \
-    src/zk_sasl.c src/zk_sasl.h
+    src/zookeeper_log.h src/zk_log.c src/zk_hashtable.h src/zk_hashtable.c
 
 # These are the symbols (classes, mostly) we want to export from our library.
 EXPORT_SYMBOLS = '(zoo_|zookeeper_|zhandle|Z|format_log_message|log_message|logLevel|deallocate_|zerror|is_unrecoverable)'
 noinst_LTLIBRARIES += libzkst.la
-libzkst_la_SOURCES =$(COMMON_SRC) src/st_adaptor.c
-libzkst_la_LIBADD = -lm -lsasl2
+libzkst_la_SOURCES =$(COMMON_SRC) $(SASL_SRC) src/st_adaptor.c
+libzkst_la_CFLAGS = $(SASL_CFLAGS)
+libzkst_la_LIBADD = -lm
 
 lib_LTLIBRARIES = libzookeeper_st.la
 libzookeeper_st_la_SOURCES =
 libzookeeper_st_la_LIBADD=libzkst.la libhashtable.la
 libzookeeper_st_la_DEPENDENCIES=libzkst.la libhashtable.la
-libzookeeper_st_la_LDFLAGS = $(LIB_LDFLAGS) -export-symbols-regex $(EXPORT_SYMBOLS)
+libzookeeper_st_la_LDFLAGS = $(LIB_LDFLAGS) -export-symbols-regex $(EXPORT_SYMBOLS) $(SASL_LIBS)
+
 
 if WANT_SYNCAPI
 noinst_LTLIBRARIES += libzkmt.la
-libzkmt_la_SOURCES =$(COMMON_SRC) src/mt_adaptor.c
-libzkmt_la_CFLAGS = -DTHREADED
-libzkmt_la_LIBADD = -lm -lsasl2
+libzkmt_la_SOURCES =$(COMMON_SRC) $(SASL_SRC) src/mt_adaptor.c
+libzkmt_la_CFLAGS = -DTHREADED $(SASL_CFLAGS)
+libzkmt_la_LIBADD = -lm
 
 lib_LTLIBRARIES += libzookeeper_mt.la
 libzookeeper_mt_la_SOURCES =
-libzookeeper_mt_la_LIBADD=libzkmt.la libhashtable.la -lpthread
+libzookeeper_mt_la_LIBADD=libzkmt.la libhashtable.la -lpthread $(SASL_LIBS)
 libzookeeper_mt_la_DEPENDENCIES=libzkmt.la libhashtable.la
 libzookeeper_mt_la_LDFLAGS = $(LIB_LDFLAGS) -export-symbols-regex $(EXPORT_SYMBOLS)
 endif
@@ -51,17 +58,18 @@ bin_PROGRAMS = cli_st
 
 cli_st_SOURCES = src/cli.c
 cli_st_LDADD = libzookeeper_st.la
+cli_st_CFLAGS = $(SASL_CFLAGS)
 
 if WANT_SYNCAPI
 bin_PROGRAMS += cli_mt load_gen
 
 cli_mt_SOURCES = src/cli.c
 cli_mt_LDADD = libzookeeper_mt.la
-cli_mt_CFLAGS = -DTHREADED
+cli_mt_CFLAGS = -DTHREADED $(SASL_CFLAGS)
 
 load_gen_SOURCES = src/load_gen.c
 load_gen_LDADD = libzookeeper_mt.la
-load_gen_CFLAGS = -DTHREADED
+load_gen_CFLAGS = -DTHREADED $(SASL_CFLAGS)
 
 endif
 
@@ -83,17 +91,17 @@ SYMBOL_WRAPPERS=$(shell cat ${srcdir}/tests/wrappers.opt)
 
 check_PROGRAMS = zktest-st
 nodist_zktest_st_SOURCES = $(TEST_SOURCES)
-zktest_st_LDADD = libzkst.la libhashtable.la $(CPPUNIT_LIBS)
-zktest_st_CXXFLAGS = -DUSE_STATIC_LIB $(CPPUNIT_CFLAGS) $(USEIPV6)
-zktest_st_LDFLAGS = -static-libtool-libs $(SYMBOL_WRAPPERS)
+zktest_st_LDADD = libzkst.la libhashtable.la $(CPPUNIT_LIBS) $(SASL_LIBS)
+zktest_st_CXXFLAGS = $(CPPUNIT_CFLAGS) $(USEIPV6) $(SASL_CFLAGS)
+zktest_st_LDFLAGS = $(SYMBOL_WRAPPERS)
 
 if WANT_SYNCAPI
   check_PROGRAMS += zktest-mt
   nodist_zktest_mt_SOURCES = $(TEST_SOURCES) tests/PthreadMocks.cc
-  zktest_mt_LDADD = libzkmt.la libhashtable.la -lpthread $(CPPUNIT_LIBS)
-  zktest_mt_CXXFLAGS = -DUSE_STATIC_LIB -DTHREADED $(CPPUNIT_CFLAGS) $(USEIPV6)
+  zktest_mt_LDADD = libzkmt.la libhashtable.la -lpthread $(CPPUNIT_LIBS) $(SASL_LIBS)
+  zktest_mt_CXXFLAGS = -DTHREADED $(CPPUNIT_CFLAGS) $(USEIPV6) $(SASL_CFLAGS)
   SYMBOL_WRAPPERS_MT=$(SYMBOL_WRAPPERS) $(shell cat ${srcdir}/tests/wrappers-mt.opt)
-  zktest_mt_LDFLAGS = -static-libtool-libs $(SYMBOL_WRAPPERS_MT)
+  zktest_mt_LDFLAGS = $(SYMBOL_WRAPPERS_MT)
 endif
 
 run-check: check
