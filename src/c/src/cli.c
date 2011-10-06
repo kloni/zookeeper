@@ -59,7 +59,7 @@ static int recvd=0;
 
 static int shutdownThisThing=0;
 
-sasl_conn_t *my_sasl_conn = NULL;
+zoo_sasl_conn_t *my_sasl_conn = NULL;
 char *service = "zookeeper";
 char *host;
 char *mech;
@@ -206,11 +206,11 @@ void watcher(zhandle_t *zzh, int type, int state, const char *path,
                     if(strcmp("GSSAPI", mech)==0 || (user && host)) {
                         zoo_sasl_connect(zzh, "zookeeper", host, &my_sasl_conn, &mechs, &mechlen);
                         fprintf(stderr, "Mechs [%d]: %s\n", mechlen, mechs);
-
-                        if (zoo_sasl_negotiate(zh, my_sasl_conn, mech, mechs)
-                                == SASL_OK) {
-                            fprintf(stderr, "SASL successfully authenticated as %s\n", user);
-                        }
+#ifdef THREADED
+                        zoo_sasl_authenticate(zh, my_sasl_conn, mech, mechs);
+#else
+                        zoo_asasl_authenticate(zh, my_sasl_conn, mech, mechs);
+#endif
                     } else {
                         fprintf(stderr, "Mechanism %s requires username (-u) and host (-h zk-sasl-md5) to be specified\n", mech);
                     }

@@ -2512,6 +2512,12 @@ static int add_multi_completion(zhandle_t *zh, int xid, void_completion_t dc,
     return add_completion(zh, xid, COMPLETION_MULTI, dc, data, 0,0, clist);
 }
 
+static int add_sasl_completion(zhandle_t *zh, int xid, sasl_completion_t dc,
+        const void *data, completion_head_t *clist)
+{
+    return add_completion(zh, xid, COMPLETION_SASL, dc, data, 0,0, clist);
+}
+
 int zookeeper_close(zhandle_t *zh)
 {
     int rc=ZOK;
@@ -3746,17 +3752,10 @@ int zoo_set_acl(zhandle_t *zh, const char *path, int version,
     return rc;
 }
 
-int queue_sasl_request(zhandle_t *zh, sasl_conn_t *conn, const char *data,
-        unsigned len, sasl_completion_t cptr) {
+static int queue_sasl_request(zhandle_t *zh, const char *data, unsigned len, void* cptr,
+        void *ctx) {
     struct oarchive *oa;
     int rc;
-#ifdef THREADED
-    char buf[8192];
-#endif
-
-    /*
-     * Register the provided completion and send the token over the wire
-     */
 
     LOG_DEBUG(("saslToken (client) length: %d", len));
 
@@ -3769,55 +3768,50 @@ int queue_sasl_request(zhandle_t *zh, sasl_conn_t *conn, const char *data,
     rc = serialize_RequestHeader(oa, "header", &h);
     rc = rc < 0 ? rc : serialize_GetSASLRequest(oa, "req", &req);
 
-#ifdef THREADED
+    enter_critical(zh);
+    rc = rc < 0 ? rc : add_sasl_completion(zh, h.xid, cptr, ctx, NULL);
+    rc = rc < 0 ? rc : queue_buffer_bytes(&zh->to_send, get_buffer(oa),
+            get_buffer_len(oa));
+    leave_critical(zh);
+    close_buffer_oarchive(&oa, 0);
+
+    LOG_DEBUG(
+            ("Sending sasl token request xid=%#x to %s", h.xid, format_current_endpoint_info(zh)));
+    adaptor_send_queue(zh, 0);
+    return (rc < 0) ? ZMARSHALLINGERROR : ZOK;
+}
+
+int zoo_sasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data,
+        unsigned len, sasl_completion_t cptr) {
+    int rc;
+    char buf[8192];
+
     struct sync_completion *sc = alloc_sync_completion();
     sc->u.sasl.token = buf;
     sc->u.sasl.token_len = sizeof(buf);
-#else
+
+    rc = queue_sasl_request(zh, data, len, SYNCHRONOUS_MARKER, sc);
+
+    if(rc==ZOK){
+        wait_sync_completion(sc);
+        rc = sc->rc;
+        if(rc == ZOK && sc->u.sasl.token_len > 0) {
+            rc = cptr(rc, zh, conn, sc->u.sasl.token, sc->u.sasl.token_len);
+        } else {
+            rc = cptr(rc, zh, conn, NULL, 0);
+        }
+    }
+
+    return rc;
+}
+
+int zoo_asasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data, unsigned len,
+        sasl_completion_t cptr) {
     struct sasl_completion_ctx *sctx =
             (struct sasl_completion_ctx *) malloc(
                     sizeof(struct sasl_completion_ctx));
     sctx->zh = zh;
     sctx->conn = conn;
-#endif
 
-    enter_critical(zh);
-
-    rc = rc < 0 ?
-            rc :
-#ifdef THREADED
-            add_completion(zh, h.xid, COMPLETION_SASL, SYNCHRONOUS_MARKER, sc, 1, NULL, NULL);
-#else
-            add_completion(zh, h.xid, COMPLETION_SASL, cptr, sctx, 0, NULL, 0);
-#endif
-    /* add this buffer to the head of the send queue */
-    rc = rc < 0 ?
-            rc :
-            queue_buffer_bytes(&zh->to_send, get_buffer(oa),
-                    get_buffer_len(oa));
-
-    leave_critical(zh);
-
-    /* We queued the buffer, so don't free it */
-    close_buffer_oarchive(&oa, 0);
-
-    LOG_DEBUG(
-            ("Sending sasl token request xid=%#x to %s", h.xid, format_current_endpoint_info(zh)));
-    /* make a best (non-blocking) effort to send the requests asap */
-    adaptor_send_queue(zh, 0);
-
-#ifdef THREADED
-    if(rc==ZOK){
-        wait_sync_completion(sc);
-        rc = sc->rc;
-        if(rc == ZOK && sc->u.sasl.token_len > 0) {
-            cptr(rc, zh, conn, sc->u.sasl.token, sc->u.sasl.token_len);
-        } else {
-            cptr(rc, zh, conn, NULL, 0);
-        }
-    }
-    free_sync_completion(sc);
-#endif
-
-    return (rc < 0) ? ZMARSHALLINGERROR : ZOK;
+    return queue_sasl_request(zh, data, len, cptr, sctx);
 }

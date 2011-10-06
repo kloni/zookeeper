@@ -34,8 +34,6 @@
 #include "recordio.h"
 #include "zookeeper.jute.h"
 
-#include <sasl/sasl.h>
-
 /**
  * \file zookeeper.h 
  * \brief ZooKeeper functions and definitions.
@@ -1578,15 +1576,40 @@ ZOOAPI int zoo_set_acl(zhandle_t *zh, const char *path, int version,
  */ 
 ZOOAPI int zoo_multi(zhandle_t *zh, int count, const zoo_op_t *ops, zoo_op_result_t *results);
 
-typedef int (*sasl_completion_t)(int rc, zhandle_t *zh, sasl_conn_t *conn,
+typedef struct zoo_sasl_conn zoo_sasl_conn_t;
+
+typedef int (*sasl_completion_t)(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn,
         const char *serverin, int serverinlen);
 
-ZOOAPI int queue_sasl_request(zhandle_t *zh, sasl_conn_t *conn, const char *data,
+/**
+ * \brief send a sasl request asynchronously.
+ *
+ * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
+ * \param zh the connection handle obtained by a call to \ref zoo_sasl_connect
+ * \param data the token
+ * \param len the token length
+ * \param cptr function to call with the server response
+ * \return ZMARSHALLINGERROR if sending failed, ZOK otherwise
+ */
+ZOOAPI int zoo_asasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data,
+        unsigned len, sasl_completion_t cptr);
+
+/**
+ * \brief send a sasl request synchronously.
+ *
+ * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
+ * \param zh the connection handle obtained by a call to \ref zoo_sasl_connect
+ * \param data the token
+ * \param len the token length
+ * \param cptr function to call with the server response
+ * \return
+ */
+ZOOAPI int zoo_sasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data,
         unsigned len, sasl_completion_t cptr);
 
 struct sasl_completion_ctx {
     zhandle_t *zh;
-    sasl_conn_t *conn;
+    zoo_sasl_conn_t *conn;
 };
 
 #ifdef __cplusplus

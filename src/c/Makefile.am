@@ -1,7 +1,7 @@
 # need this for Doxygen integration
 include $(top_srcdir)/aminclude.am
 
-AM_CPPFLAGS = -I${srcdir}/include -I${srcdir}/tests -I${srcdir}/generated -I/usr/include
+AM_CPPFLAGS = -I${srcdir}/include -I${srcdir}/tests -I${srcdir}/generated
 AM_CFLAGS = -Wall -Werror 
 AM_CXXFLAGS = -Wall $(USEIPV6)
 
