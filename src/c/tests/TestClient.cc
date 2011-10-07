@@ -41,7 +41,7 @@ using namespace std;
 #include "Util.h"
 
 #ifdef SASL
-#include <sasl/sasl.h>
+#include <zookeeper_sasl.h>
 #endif
 
 struct buff_struct_2 {
@@ -431,20 +431,26 @@ public:
         count++;
     }
 
-#ifdef SASL
     static int saslDigestInitCompletion(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn,
         const char *serverin, int serverinlen) {
+        const char *realm = "realm";
+        const char *nonce = "nonce";
         CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
+        // response should look like
+        // realm="zk-sasl-md5",nonce="4n7iytvP7E9GyRVvGQ8pATPPnXJ0GjOB5rmTzk3a",...
+        //LOG_DEBUG(("SASL Response: %s", serverin));
+        CPPUNIT_ASSERT(strstr(serverin, realm)!=NULL);
+        CPPUNIT_ASSERT(strstr(serverin, nonce)!=NULL);
         return rc;
     }
 
+#ifdef SASL
     static int saslSimpleCallback(void *context __attribute__((unused)), int id,
             const char **result, unsigned *len) {
         const char *user = "super";
 
         /* paranoia check */
         if (!result) {
-            fprintf(stderr, "SASL CB no result\n");
             return -1;
         }
 
@@ -456,10 +462,8 @@ public:
             *result = user;
             break;
         default:
-            fprintf(stderr, "??? SASL CB [%d]\n", id);
             return -1;
         }
-        fprintf(stderr, "SASL CB [%d]: %s\n", id, *result);
         return 0;
     }
 
@@ -483,7 +487,6 @@ public:
         default:
             return -1;
         }
-        fprintf(stderr, "SASL PASS [%d]: %s\n", id, (*psecret)->data);
         return 0;
     }
 #endif
@@ -1180,12 +1183,11 @@ public:
       }
     }
 
-#ifdef SASL
     void testSasl() {
         int rc;
         const char *saslopt = "-sasl";
         count = 0;
-        watchctx_t ctx1, ctx2, ctx3, ctx4, ctx5;
+        watchctx_t ctx1, ctx2;
 
         zhandle_t *zk = createClient(&ctx1);
         zoo_sasl_conn_t *sasl_conn;
@@ -1203,9 +1205,7 @@ public:
 
         rc = zoo_sasl(zk, NULL, (const char *) "", 0, saslDigestInitCompletion);
         CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
-
-        stopServer();
-        startServerWithOpts(saslopt);
+#ifdef SASL
 
         sasl_callback_t callbacks[] = {
                 { SASL_CB_USER, (int (*)())&saslSimpleCallback, NULL },
@@ -1224,17 +1224,15 @@ public:
 
         rc = zoo_sasl_authenticate(zk2, sasl_conn, mech, supportedmechs);
         CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
-
-        //sleep(2);
-
+#endif
         stopServer();
         startServer();
 
     }
-#endif
 };
 
 volatile int Zookeeper_simpleSystem::count;
 zhandle_t *Zookeeper_simpleSystem::async_zk;
 const char Zookeeper_simpleSystem::hostPorts[] = "127.0.0.1:22181";
 CPPUNIT_TEST_SUITE_REGISTRATION(Zookeeper_simpleSystem);
+

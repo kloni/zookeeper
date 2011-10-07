@@ -1949,24 +1949,24 @@ static void process_sync_completion(
         sc->rc = deserialize_multi(cptr->xid, cptr, ia);
         break;
     case COMPLETION_SASL:
-		if (sc->rc==0) {
-			struct SetSASLResponse res;
-			int len;
-			deserialize_SetSASLResponse(ia, "reply", &res);
-			if (res.token.len <= sc->u.sasl.token_len) {
+        if (sc->rc==0) {
+            struct SetSASLResponse res;
+            int len;
+            deserialize_SetSASLResponse(ia, "reply", &res);
+            if (res.token.len <= sc->u.sasl.token_len) {
                 len = res.token.len;
             } else {
                 len = sc->u.data.buff_len;
             }
-			sc->u.sasl.token_len = len;
+            sc->u.sasl.token_len = len;
             if (len == -1) {
                 sc->u.sasl.token = NULL;
             } else {
-				memcpy(sc->u.sasl.token, res.token.buff, len);
-			}
-			deallocate_SetSASLResponse(&res);
-		}
-		break;
+                memcpy(sc->u.sasl.token, res.token.buff, len);
+            }
+            deallocate_SetSASLResponse(&res);
+        }
+        break;
     default:
         LOG_DEBUG(("Unsupported completion type=%d", cptr->c.type));
         break;

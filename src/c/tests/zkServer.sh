@@ -21,7 +21,7 @@ ZOOPORT=22181
 
 if [ "x$1" == "x" ]
 then
-    echo "USAGE: $0 startClean|start|stop hostPorts [-sasl]"
+    echo "USAGE: $0 startClean|start|stop hostPorts [-sasl] [-verbose]"
     exit 2
 fi
 
@@ -38,6 +38,10 @@ do
             fi
             JVMARGS=$JVMARGS\ -Dzookeeper.authProvider.1=org.apache.zookeeper.server.auth.SASLAuthenticationProvider
             JVMARGS=$JVMARGS\ -Djava.security.auth.login.config=$SASLCONFFILE
+        fi
+        if [ "$var" == "-verbose" ]
+        then
+            JVMARGS=$JVMARGS\ -Dzookeeper.root.logger=DEBUG,CONSOLE\ -Dzookeeper.console.threshold=DEBUG
         fi
     fi
 done

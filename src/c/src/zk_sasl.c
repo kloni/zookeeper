@@ -24,6 +24,7 @@
 
 #include "zk_adaptor.h"
 #include "zookeeper_log.h"
+#include "zookeeper_sasl.h"
 #include <sasl/sasl.h>
 
 #define SAMPLE_SEC_BUF_SIZE (2048)

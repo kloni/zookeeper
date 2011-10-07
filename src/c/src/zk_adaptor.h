@@ -103,9 +103,9 @@ struct sync_completion {
             struct Stat stat2;
         } strs_stat;
         struct {
-			char *token;
-			int token_len;
-		} sasl;
+            char *token;
+            int token_len;
+        } sasl;
     } u;
     int complete;
 #ifdef THREADED

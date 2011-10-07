@@ -21,6 +21,10 @@
 
 #include <sasl/sasl.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * \brief initialize sasl library
  *
@@ -68,5 +72,9 @@ ZOOAPI int zoo_sasl_authenticate(zhandle_t *th, zoo_sasl_conn_t *conn, const cha
  */
 ZOOAPI int zoo_asasl_authenticate(zhandle_t *th, zoo_sasl_conn_t *conn, const char *mech,
         const char *supportedmechs);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ZOOKEEPER_SASL_H_ */
