@@ -61,7 +61,7 @@ ZOOAPI int zoo_sasl_authenticate(zhandle_t *th, zoo_sasl_conn_t *conn, const cha
         const char *supportedmechs);
 
 /**
- * \brief authenticates ssynchronously
+ * \brief authenticates asynchronously
  *
  * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
  * \param zh the connection handle obtained by a call to \ref zoo_sasl_connect

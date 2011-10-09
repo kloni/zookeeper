@@ -1187,9 +1187,8 @@ public:
         int rc;
         const char *saslopt = "-sasl";
         count = 0;
-        watchctx_t ctx1, ctx2;
+        watchctx_t ctx1, ctx2, ctx3, ctx4;
 
-        zhandle_t *zk = createClient(&ctx1);
         zoo_sasl_conn_t *sasl_conn;
         const char *supportedmechs;
         const char *mech = "DIGEST-MD5";
@@ -1197,14 +1196,28 @@ public:
         const char *host = "zk-sasl-md5";
         int supportedmechcount;
 
+        const char *serverin;
+        unsigned serverinlen;
+        const char *realm = "realm";
+        const char *nonce = "nonce";
+
         stopServer();
         startServerWithOpts(saslopt);
 
-        //zoo_set_log_stream(stdout);
-        //zoo_set_debug_level(ZOO_LOG_LEVEL_DEBUG);
+        // zoo_set_log_stream(stdout);
+        // zoo_set_debug_level(ZOO_LOG_LEVEL_DEBUG);
 
-        rc = zoo_sasl(zk, NULL, (const char *) "", 0, saslDigestInitCompletion);
+        zhandle_t *zk1 = createClient(&ctx1);
+        rc = zoo_sasl(zk1, NULL, (const char *) "", 0, &serverin, &serverinlen);
         CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
+        // response should look like
+        // realm="zk-sasl-md5",nonce="4n7iytvP7E9GyRVvGQ8pATPPnXJ0GjOB5rmTzk3a",...
+        //LOG_DEBUG(("SASL Response: %s", serverin));
+        CPPUNIT_ASSERT(strstr(serverin, realm)!=NULL);
+        CPPUNIT_ASSERT(strstr(serverin, nonce)!=NULL);
+
+        zhandle_t *zk2 = createClient(&ctx2);
+        rc = zoo_asasl(zk2, NULL, (const char *) "", 0, saslDigestInitCompletion);
 #ifdef SASL
 
         sasl_callback_t callbacks[] = {
@@ -1216,13 +1229,13 @@ public:
         rc = zoo_sasl_init(callbacks);
         CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
 
-        zhandle_t *zk2 = createClient(&ctx2);
+        zhandle_t *zk3 = createClient(&ctx3);
 
-        rc = zoo_sasl_connect(zk2, (char *) service, (char *) host, &sasl_conn,
+        rc = zoo_sasl_connect(zk3, (char *) service, (char *) host, &sasl_conn,
                 &supportedmechs, &supportedmechcount);
         CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
 
-        rc = zoo_sasl_authenticate(zk2, sasl_conn, mech, supportedmechs);
+        rc = zoo_sasl_authenticate(zk3, sasl_conn, mech, supportedmechs);
         CPPUNIT_ASSERT_EQUAL((int) ZOK, rc);
 #endif
         stopServer();

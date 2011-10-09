@@ -25,7 +25,6 @@
 #include "zk_adaptor.h"
 #include "zookeeper_log.h"
 #include "zookeeper_sasl.h"
-#include <sasl/sasl.h>
 
 #define SAMPLE_SEC_BUF_SIZE (2048)
 
@@ -72,8 +71,8 @@ int zoo_asasl_authenticate(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *mec
     return sasl_auth(zh, conn, mech, supportedmechs, 0);
 }
 
-static int sasl_step(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn, const char *serverin,
-        int serverinlen, int sync) {
+static int sasl_step(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn, int sync,
+        const char *serverin, int serverinlen) {
     const char *clientout;
     unsigned clientoutlen;
     int sr;
@@ -90,14 +89,9 @@ static int sasl_step(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn, const char *s
     return sasl_proceed(sr, zh, conn, clientout, clientoutlen, sync);
 }
 
-static int sasl_step_sync(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn, const char *serverin,
-        int serverinlen) {
-    return sasl_step(rc, zh, conn, serverin, serverinlen, 1);
-}
-
-static int sasl_step_async(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn, const char *serverin,
-        int serverinlen) {
-    return sasl_step(rc, zh, conn, serverin, serverinlen, 0);
+static int sasl_step_async(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn,
+        const char *serverin, int serverinlen) {
+    return sasl_step(rc, zh, conn, 0, serverin, serverinlen);
 }
 
 static int sasl_complete(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn,
@@ -114,6 +108,8 @@ static int sasl_complete(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn,
 static int sasl_proceed(int sr, zhandle_t *zh, zoo_sasl_conn_t *conn,
         const char *clientout, int clientoutlen, int sync) {
     int r = ZOK;
+    const char *serverin;
+    unsigned serverinlen;
 
     if (sr != SASL_OK && sr != SASL_CONTINUE) {
         LOG_ERROR(("starting SASL negotiation: %s %s",
@@ -124,8 +120,12 @@ static int sasl_proceed(int sr, zhandle_t *zh, zoo_sasl_conn_t *conn,
 
     if (sr == SASL_CONTINUE || clientoutlen > 0) {
         if(sync) {
-            r = zoo_sasl(zh, conn, clientout, clientoutlen,
-                (sr == SASL_CONTINUE) ? sasl_step_sync : sasl_complete);
+            r = zoo_sasl(zh, conn, clientout, clientoutlen, &serverin, &serverinlen);
+            if (sr == SASL_CONTINUE) {
+                r = sasl_step(r, zh, conn, sync, serverin, serverinlen);
+            } else {
+                r = sasl_complete(r, zh, conn, serverin, serverinlen);
+            }
         } else {
             r = zoo_asasl(zh, conn, clientout, clientoutlen,
                            (sr == SASL_CONTINUE) ? sasl_step_async : sasl_complete);

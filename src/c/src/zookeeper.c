@@ -3760,7 +3760,7 @@ static int queue_sasl_request(zhandle_t *zh, const char *data, unsigned len, voi
     LOG_DEBUG(("saslToken (client) length: %d", len));
 
     struct RequestHeader h = { STRUCT_INITIALIZER(xid , get_xid()),
-            STRUCT_INITIALIZER(type , ZOO_SASL) };
+            STRUCT_INITIALIZER(type , ZOO_SASL_OP) };
     struct GetSASLRequest req = { { STRUCT_INITIALIZER(len, len),
             STRUCT_INITIALIZER(buff, len>0 ? (char *) data : "") } };
 
@@ -3781,8 +3781,8 @@ static int queue_sasl_request(zhandle_t *zh, const char *data, unsigned len, voi
     return (rc < 0) ? ZMARSHALLINGERROR : ZOK;
 }
 
-int zoo_sasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data,
-        unsigned len, sasl_completion_t cptr) {
+int zoo_sasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *clientout,
+        unsigned clientoutlen, const char **serverin, unsigned *serverinlen) {
     int rc;
     char buf[8192];
 
@@ -3790,28 +3790,35 @@ int zoo_sasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data,
     sc->u.sasl.token = buf;
     sc->u.sasl.token_len = sizeof(buf);
 
-    rc = queue_sasl_request(zh, data, len, SYNCHRONOUS_MARKER, sc);
+    rc = queue_sasl_request(zh, clientout, clientoutlen, SYNCHRONOUS_MARKER, sc);
 
     if(rc==ZOK){
         wait_sync_completion(sc);
         rc = sc->rc;
         if(rc == ZOK && sc->u.sasl.token_len > 0) {
-            rc = cptr(rc, zh, conn, sc->u.sasl.token, sc->u.sasl.token_len);
+            *serverin = sc->u.sasl.token;
+            *serverinlen = sc->u.sasl.token_len;
         } else {
-            rc = cptr(rc, zh, conn, NULL, 0);
+            serverinlen = 0;
+            *serverin = NULL;
         }
     }
+    free_sync_completion(sc);
 
     return rc;
 }
 
-int zoo_asasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data, unsigned len,
-        sasl_completion_t cptr) {
+int zoo_asasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *clientout,
+        unsigned clientoutlen, sasl_completion_t cptr) {
+    int r;
     struct sasl_completion_ctx *sctx =
             (struct sasl_completion_ctx *) malloc(
                     sizeof(struct sasl_completion_ctx));
     sctx->zh = zh;
     sctx->conn = conn;
 
-    return queue_sasl_request(zh, data, len, cptr, sctx);
+    r = queue_sasl_request(zh, clientout, clientoutlen, cptr, sctx);
+    free(sctx);
+
+    return r;
 }

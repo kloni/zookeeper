@@ -1586,26 +1586,27 @@ typedef int (*sasl_completion_t)(int rc, zhandle_t *zh, zoo_sasl_conn_t *conn,
  *
  * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
  * \param zh the connection handle obtained by a call to \ref zoo_sasl_connect
- * \param data the token
- * \param len the token length
+ * \param clientout the token
+ * \param clientoutlen the token length
  * \param cptr function to call with the server response
  * \return ZMARSHALLINGERROR if sending failed, ZOK otherwise
  */
-ZOOAPI int zoo_asasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data,
-        unsigned len, sasl_completion_t cptr);
+ZOOAPI int zoo_asasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *clientout,
+        unsigned clientoutlen, sasl_completion_t cptr);
 
 /**
  * \brief send a sasl request synchronously.
  *
  * \param zh the zookeeper handle obtained by a call to \ref zookeeper_init
  * \param zh the connection handle obtained by a call to \ref zoo_sasl_connect
- * \param data the token
- * \param len the token length
- * \param cptr function to call with the server response
+ * \param clientout the token to send
+ * \param clientoutlen the token  length
+ * \param serverin the received token
+ * \param serverinlen the token length
  * \return
  */
-ZOOAPI int zoo_sasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *data,
-        unsigned len, sasl_completion_t cptr);
+ZOOAPI int zoo_sasl(zhandle_t *zh, zoo_sasl_conn_t *conn, const char *clientout,
+        unsigned clientoutlen, const char **serverin, unsigned *serverinlen);
 
 struct sasl_completion_ctx {
     zhandle_t *zh;
